@@ -1,0 +1,137 @@
+# 20 question/answer pairs over data/corpus/ (22 documents).
+#
+# `source`  — the document that must appear in the retrieved set (gold label for
+#             hit-rate and MRR).
+# `answer_keywords` — strings a correct answer must contain. Deliberately numbers
+#             and proper nouns, not prose, so the check is objective.
+# `kind`    — `lexical` quotes the document's own wording (BM25 should win these);
+#             `semantic` paraphrases (dense should win); `twin` has a near-duplicate
+#             document in the corpus that answers the same question differently, so
+#             retrieving the wrong one of the pair is a plausible, scored failure.
+#
+# The twin pairs are the point of this set. 02-deployment/13-mobile-release-policy,
+# 03-oncall/14-incident-comms, 05-data-retention/16-warehouse-retention,
+# 07-security-policy/15-contractor-access, 11-api-guidelines/17-sdk-versioning,
+# 12-hiring/18-interviewer-guide, 10-ml-platform/19-experiment-tracking,
+# 06-architecture/20-clickhouse-tuning.
+
+questions:
+  - id: q01
+    question: How long does the nw bootstrap script take to run?
+    source: 01-onboarding.md
+    answer_keywords: ["40"]
+    kind: lexical
+
+  - id: q02
+    question: What is the mandatory meeting overlap window across the three hubs?
+    source: 01-onboarding.md
+    answer_keywords: ["13:00", "16:00"]
+    kind: lexical
+
+  - id: q03
+    question: What is the rollback target for a backend production release?
+    source: 02-deployment.md
+    answer_keywords: ["five minutes", "5 minutes", "five"]
+    kind: twin
+
+  - id: q04
+    question: Why can a risky change not be rolled back on iOS, and what is done instead?
+    source: 13-mobile-release-policy.md
+    answer_keywords: ["expedited", "re-promoted", "no mobile rollback", "There is no mobile rollback"]
+    kind: twin
+
+  - id: q05
+    question: Can I drop a database column in the same release that stops writing to it?
+    source: 02-deployment.md
+    answer_keywords: ["expand", "contract"]
+    kind: semantic
+
+  - id: q06
+    question: What happens if one service pages on-call more than four times in a rotation?
+    source: 03-oncall.md
+    answer_keywords: ["reliability backlog", "feature work"]
+    kind: lexical
+
+  - id: q07
+    question: During a Sev-1, who writes the customer-facing status updates?
+    source: 14-incident-comms.md
+    answer_keywords: ["comms lead"]
+    kind: twin
+
+  - id: q08
+    question: How often is the status page updated during an unresolved Sev-1?
+    source: 14-incident-comms.md
+    answer_keywords: ["30"]
+    kind: twin
+
+  - id: q09
+    question: How many approvals does a contractor's pull request need?
+    source: 15-contractor-access.md
+    answer_keywords: ["two", "Two", "2"]
+    kind: twin
+
+  - id: q10
+    question: How long are access audit logs kept?
+    source: 05-data-retention.md
+    answer_keywords: ["seven years", "7 years", "seven"]
+    kind: twin
+
+  - id: q11
+    question: How long is the raw layer of the analytics warehouse kept, and why that number?
+    source: 16-warehouse-retention.md
+    answer_keywords: ["180"]
+    kind: twin
+
+  - id: q12
+    question: How long is a client SDK major version supported after its successor ships?
+    source: 17-sdk-versioning.md
+    answer_keywords: ["12 months", "12"]
+    kind: twin
+
+  - id: q13
+    question: What header makes a write request safe to retry, and how long are the keys kept?
+    source: 11-api-guidelines.md
+    answer_keywords: ["Idempotency-Key", "24"]
+    kind: semantic
+
+  - id: q14
+    question: Why was offset pagination removed from the public API?
+    source: 11-api-guidelines.md
+    answer_keywords: ["duplicate"]
+    kind: semantic
+
+  - id: q15
+    question: How many partitions does the events.raw Kafka topic have and what is its retention?
+    source: 06-architecture.md
+    answer_keywords: ["48", "72"]
+    kind: lexical
+
+  - id: q16
+    question: Why are ClickHouse event tables partitioned by month instead of by day?
+    source: 20-clickhouse-tuning.md
+    answer_keywords: ["parts", "merge"]
+    kind: twin
+
+  - id: q17
+    question: In a hiring debrief, who speaks first and how is a tie resolved?
+    source: 18-interviewer-guide.md
+    answer_keywords: ["weakest", "no-hire", "no hire"]
+    kind: twin
+
+  - id: q18
+    question: At what population stability index does model drift page the owning team?
+    source: 10-ml-platform.md
+    answer_keywords: ["0.3"]
+    kind: twin
+
+  - id: q19
+    question: When is a training run tagged unreproducible and excluded from comparisons?
+    source: 19-experiment-tracking.md
+    answer_keywords: ["git SHA", "dataset version", "lockfile", "four"]
+    kind: twin
+
+  - id: q20
+    question: Which kind of feature flag is allowed to live in the codebase permanently?
+    source: 21-feature-flags.md
+    answer_keywords: ["Operational", "operational"]
+    kind: semantic

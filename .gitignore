@@ -1,0 +1,12 @@
+# local state, not source
+data/qdrant/
+data/evalruns/
+data/sweep.json
+mlruns/
+
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+.DS_Store
