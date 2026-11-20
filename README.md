@@ -62,6 +62,8 @@ and defend these decisions. [`docs/TRACE.md`](docs/TRACE.md) — a real captured
 | `app/tracing.py` | OpenTelemetry spans; file / OTLP exporters, off by default |
 | `app/trace_tree.py` | renders a JSONL trace as the span tree in `docs/TRACE.md` |
 | `evals/mlflow_history.py` | renders the MLflow run history into `docs/METRICS.md` |
+| `evals/wandb_check.py` | verifies the W&B offline runs really contain the metrics |
+| `evals/langsmith_check.py` | one-shot LangSmith OTLP check — needs your own api key |
 
 ---
 
@@ -266,7 +268,7 @@ Four things that work, roughly in order of cost:
 
 ---
 
-## Tracing and metric history
+## Tracing, metric history and experiment tracking
 
 Two kinds of evidence, both reproducible from the repo — **no screenshots**, because a
 screenshot of a trace UI proves only that a screenshot exists. These are diffable, need no
@@ -274,8 +276,10 @@ image host, and anyone can regenerate them and check they match.
 
 ```bash
 make trace      # one traced /ask, rendered as a span tree -> docs/TRACE.md
-make metrics    # the MLflow run history as a table    -> docs/METRICS.md
+make metrics    # the MLflow run history as a table       -> docs/METRICS.md
+make wandb      # log the sweep to W&B offline, then verify it
 make mlflow-ui  # browse the history interactively
+make langsmith  # verify the LangSmith export — needs YOUR api key
 ```
 
 ### A real captured trace
@@ -317,13 +321,63 @@ runs** rather than only in the last console output. `docs/METRICS.md` is the ren
 history; it reproduces the sweep table above from a completely separate code path, which is
 a cheap check that neither is lying.
 
-### On LangSmith
+### Weights & Biases — offline, so it is actually verifiable
 
-`TRACE_EXPORTER=otlp` pointed at LangSmith's OTLP endpoint with an `Authorization` header
-works, and the config is in `.env.example`. **That path is implemented and has never been
-executed** — no LangSmith key was used in this repo. So this makes *OpenTelemetry, tracing,
-observability and MLflow* defensible, and it does **not** make *LangSmith* or *W&B*
-defensible. Those should not go on a CV off the back of this repo.
+```bash
+python evals/run_evals.py --sweep --wandb   # 7 runs
+python evals/wandb_check.py                 # verify them
+```
+
+`--wandb` defaults to `WANDB_MODE=offline`, which writes complete run directories to
+`./wandb/` with **no account, no API key and no network**. That is the whole reason it is
+worth having: anyone who clones this repo can reproduce it. `wandb sync ./wandb` uploads
+to a real project later; `WANDB_MODE=online` with a key skips the two-step.
+
+Each run logs the config, every metric, and a **per-question table** — the aggregate is
+already in the eval table above, so the miss list is the part that makes a W&B run worth
+opening.
+
+An offline run writes to a binary transaction log, not readable JSON, so "the directory
+exists" proves nothing. `evals/wandb_check.py` greps the log for every expected metric key
+and fails loudly if any is missing. Verified output:
+
+```
+7 W&B run(s) under wandb
+
+  offline-run-20261120_132526-x90lqjqa            18251b  ok
+  offline-run-20261120_132527-523sz64i            17874b  ok
+  offline-run-20261120_132527-57xi0yn3            17911b  ok
+  offline-run-20261120_132527-tg7by6k2            17901b  ok
+  offline-run-20261120_132527-vhyi7mzi            17884b  ok
+  offline-run-20261120_132528-5gtnv2u5            17918b  ok
+  offline-run-20261120_132528-bc7vuaxs            17871b  ok
+
+all 7 run(s) contain every expected metric key
+```
+
+MLflow and W&B are logged side by side rather than one instead of the other, because they
+answer different questions here — MLflow is the local history, W&B is the shareable one —
+and both read the same `Result` objects, so they cannot disagree.
+
+### LangSmith — written, configured, and **not verified**
+
+`TRACE_EXPORTER=otlp` pointed at LangSmith's OTLP endpoint with an `x-api-key` header
+works in principle, and the config is in `.env.example`.
+
+**It has never been executed.** Unlike W&B, LangSmith is a hosted service with no local or
+offline mode, so there is no way to exercise it without an account. Rather than leave that
+as a claim, `evals/langsmith_check.py` turns it into a 30-second check *you* can run:
+
+```bash
+export LANGSMITH_API_KEY=lsv2_pt_...
+python evals/langsmith_check.py
+```
+
+It emits one trace and reports whether the collector accepted it.
+
+**So, precisely:** this repo makes *OpenTelemetry, tracing, observability, MLflow and
+Weights & Biases* defensible. It does **not** make *LangSmith* defensible — that one stays
+unclaimed until someone runs the check above with a real key.
 
 ---
 
@@ -376,6 +430,10 @@ behind it. Specifically:
   tenant-scoped filtering at the vector-store query, not after it.
 - **Tracing has only been exercised with the file exporter.** The OTLP path (and therefore
   the LangSmith path) is implemented and unrun — no collector and no key were used.
+  `evals/langsmith_check.py` exists so that is a check you can run, not a claim you have
+  to take on trust.
+- **W&B was exercised offline only.** The 7 runs are real and verified, but nothing was
+  uploaded to a W&B project — `wandb sync` was never run.
 - **BM25 is an in-process index** rebuilt from the store on each ingest. Fine to ~10⁵
   chunks; past that it belongs in the engine that already holds the text (Qdrant sparse
   vectors or Postgres `tsvector`).

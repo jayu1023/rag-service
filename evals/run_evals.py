@@ -248,6 +248,65 @@ def print_misses(result: Result) -> None:
     print()
 
 
+def log_to_wandb(configs: list[Config], results: list[Result], top_k: int) -> None:
+    """Log each config as a W&B run.
+
+    **Offline by default.** `WANDB_MODE=offline` writes complete run directories
+    to `./wandb/` with no account, no API key and no network — which is what
+    makes this reproducible by anyone who clones the repo. `wandb sync ./wandb`
+    uploads them to a real project later, and `WANDB_MODE=online` with a key
+    skips the two-step.
+
+    Logged alongside MLflow rather than instead of it, because the two answer
+    different questions: MLflow here is the local metric history, W&B is the
+    shareable one. Both read the same `Result` objects, so they cannot disagree.
+    """
+    import os
+
+    os.environ.setdefault("WANDB_MODE", "offline")
+    os.environ.setdefault("WANDB_SILENT", "true")
+
+    import wandb
+
+    for cfg, result in zip(configs, results):
+        run = wandb.init(
+            project="rag-service-retrieval",
+            name=cfg.name,
+            config=cfg.__dict__,
+            reinit=True,
+        )
+        wandb.log(
+            {
+                "hit_rate_at_1": result.hit_1,
+                "hit_rate_at_3": result.hit_3,
+                f"hit_rate_at_{top_k}": result.hit_rate,
+                f"mrr_at_{top_k}": result.mrr,
+                "recall_at_candidates": result.recall_candidates,
+                "kw_match": result.kw_match,
+                "faithfulness_proxy": result.faithful,
+                "p50_latency_ms": result.p50_latency_ms,
+                "chunks_indexed": result.chunks_indexed,
+            }
+        )
+        # The per-question detail is what makes a W&B run worth opening: the
+        # aggregate is already in the table, the miss list is not.
+        table = wandb.Table(
+            columns=["id", "kind", "gold", "rank", "in_candidates", "kw_match", "top_source"]
+        )
+        for row in result.per_question:
+            table.add_data(
+                row["id"], row["kind"], row["gold"], row["rank"],
+                row["in_candidates"], row["kw_match"], row["top_source"],
+            )
+        wandb.log({"per_question": table})
+        run.finish()
+
+    mode = os.environ["WANDB_MODE"]
+    print(f"logged {len(results)} run(s) to W&B (mode={mode}, ./wandb)")
+    if mode == "offline":
+        print("  upload later with: wandb sync ./wandb")
+
+
 SWEEP = [
     Config("chunk512_hybrid_rr"),
     Config("chunk512_dense_rr", hybrid=False),
@@ -263,6 +322,12 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--sweep", action="store_true", help="run the full ablation")
     parser.add_argument("--mlflow", action="store_true", help="log runs to MLflow")
+    parser.add_argument(
+        "--wandb",
+        action="store_true",
+        help="log runs to Weights & Biases. Defaults to WANDB_MODE=offline, which "
+        "needs no account and no network; `wandb sync` uploads later if you want.",
+    )
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--json-out", type=Path, default=None)
     args = parser.parse_args()
@@ -289,6 +354,9 @@ def main() -> int:
             json.dumps([r.__dict__ for r in results], indent=2, default=str)
         )
         print(f"wrote {args.json_out}")
+
+    if args.wandb:
+        log_to_wandb(configs, results, args.top_k)
 
     if args.mlflow:
         import mlflow

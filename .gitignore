@@ -10,3 +10,5 @@ __pycache__/
 .pytest_cache/
 .env
 .DS_Store
+wandb/
+data/trace.jsonl

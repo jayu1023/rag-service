@@ -1,7 +1,7 @@
 VENV ?= .venv
 PY   := $(VENV)/bin/python
 
-.PHONY: help venv install dev evals sweep test fmt up down ingest ask trace metrics clean
+.PHONY: help venv install dev evals sweep test fmt up down ingest ask trace metrics wandb langsmith clean
 
 help:
 	@grep -E '^[a-z-]+:.*?##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | expand -t24
@@ -37,6 +37,13 @@ trace: ## run one traced /ask and render the span tree (writes docs/TRACE.md)
 metrics: ## render the MLflow run history (writes docs/METRICS.md)
 	$(PY) evals/mlflow_history.py --write
 
+wandb: ## log the sweep to W&B offline (no account needed) and verify it
+	$(PY) evals/run_evals.py --sweep --wandb
+	$(PY) evals/wandb_check.py
+
+langsmith: ## verify the LangSmith OTLP export — needs YOUR LANGSMITH_API_KEY
+	$(PY) evals/langsmith_check.py
+
 mlflow-ui: ## browse the metric history interactively
 	$(VENV)/bin/mlflow ui --backend-store-uri ./mlruns
 
@@ -50,4 +57,4 @@ down:
 	docker compose down -v
 
 clean:
-	rm -rf data/qdrant data/evalruns data/sweep.json data/trace.jsonl .pytest_cache mlruns
+	rm -rf data/qdrant data/evalruns data/sweep.json data/trace.jsonl .pytest_cache mlruns wandb
