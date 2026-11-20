@@ -359,25 +359,37 @@ MLflow and W&B are logged side by side rather than one instead of the other, bec
 answer different questions here — MLflow is the local history, W&B is the shareable one —
 and both read the same `Result` objects, so they cannot disagree.
 
-### LangSmith — written, configured, and **not verified**
+### LangSmith — verified by export, 2026-11-20
 
-`TRACE_EXPORTER=otlp` pointed at LangSmith's OTLP endpoint with an `x-api-key` header
-works in principle, and the config is in `.env.example`.
-
-**It has never been executed.** Unlike W&B, LangSmith is a hosted service with no local or
-offline mode, so there is no way to exercise it without an account. Rather than leave that
-as a claim, `evals/langsmith_check.py` turns it into a 30-second check *you* can run:
+`TRACE_EXPORTER=otlp` pointed at LangSmith's OTLP endpoint with an `x-api-key` header.
+Config is in `.env.example`; `evals/langsmith_check.py` is the one-command check:
 
 ```bash
-export LANGSMITH_API_KEY=lsv2_pt_...
-python evals/langsmith_check.py
+export LANGSMITH_API_KEY=lsv2_...
+make langsmith
 ```
 
-It emits one trace and reports whether the collector accepted it.
+```
+PASS: 2/2 export(s) accepted (HTTP 2xx).
+```
 
-**So, precisely:** this repo makes *OpenTelemetry, tracing, observability, MLflow and
-Weights & Biases* defensible. It does **not** make *LangSmith* defensible — that one stays
-unclaimed until someone runs the check above with a real key.
+**Precisely what that verifies:** LangSmith's OTLP collector accepted both spans with a
+2xx. That is the integration working — correct endpoint, correct header, correct payload
+shape. It does not, by itself, prove anything about how the trace renders in their UI.
+
+The check builds the OTLP exporter directly rather than going through `app.tracing`,
+because a span pipeline **swallows export failures by design** — tracing must never break
+the request it is tracing — and that is exactly the wrong property for a verification
+script. Here the export result is inspected and the exit code reflects it: `0` accepted,
+`1` rejected (401/403 = key, 404 = endpoint), `2` no key. A passing run is evidence, not
+an absence of complaint.
+
+**Run by the repo owner with their own key, not by the author of the code.** No key is
+committed, and `.env` is gitignored. Anyone else wanting to confirm it runs the same
+command with their own key — a free account covers 5,000 traces/month.
+
+**So, precisely:** this repo makes *OpenTelemetry, tracing, observability, MLflow,
+Weights & Biases and LangSmith* defensible.
 
 ---
 
@@ -428,10 +440,9 @@ behind it. Specifically:
   `faithful` describe the extractive fallback path.
 - **No auth, no rate limiting, no multi-tenancy.** A real deployment needs all three, and
   tenant-scoped filtering at the vector-store query, not after it.
-- **Tracing has only been exercised with the file exporter.** The OTLP path (and therefore
-  the LangSmith path) is implemented and unrun — no collector and no key were used.
-  `evals/langsmith_check.py` exists so that is a check you can run, not a claim you have
-  to take on trust.
+- **The OTLP path is verified only against LangSmith**, by a single `make langsmith` run
+  that both spans were accepted on (HTTP 2xx, 2026-11-20). No other collector — Jaeger,
+  Tempo, Honeycomb — has been tried, and the day-to-day exporter here is still `file`.
 - **W&B was exercised offline only.** The 7 runs are real and verified, but nothing was
   uploaded to a W&B project — `wandb sync` was never run.
 - **BM25 is an in-process index** rebuilt from the store on each ingest. Fine to ~10⁵
