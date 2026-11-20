@@ -12,7 +12,8 @@ Postgres/pgvector).
 
 **Docs:** [`docs/EXPLAINER.md`](docs/EXPLAINER.md) — how every piece works and why, from
 first principles. [`docs/INTERVIEW_GUIDE.md`](docs/INTERVIEW_GUIDE.md) — how to present
-and defend these decisions.
+and defend these decisions. [`docs/TRACE.md`](docs/TRACE.md) — a real captured span tree.
+[`docs/METRICS.md`](docs/METRICS.md) — the MLflow run history.
 
 ---
 
@@ -58,6 +59,9 @@ and defend these decisions.
 | `app/answer.py` | prompt assembly, context budgeting, SSE streaming, extractive fallback |
 | `app/main.py` | `POST /ingest`, `POST /ask` (SSE), `POST /ask/sync`, `GET /health` |
 | `evals/run_evals.py` | hit@k, MRR, candidate recall, keyword match, faithfulness proxy + ablation sweep |
+| `app/tracing.py` | OpenTelemetry spans; file / OTLP exporters, off by default |
+| `app/trace_tree.py` | renders a JSONL trace as the span tree in `docs/TRACE.md` |
+| `evals/mlflow_history.py` | renders the MLflow run history into `docs/METRICS.md` |
 
 ---
 
@@ -262,6 +266,67 @@ Four things that work, roughly in order of cost:
 
 ---
 
+## Tracing and metric history
+
+Two kinds of evidence, both reproducible from the repo — **no screenshots**, because a
+screenshot of a trace UI proves only that a screenshot exists. These are diffable, need no
+image host, and anyone can regenerate them and check they match.
+
+```bash
+make trace      # one traced /ask, rendered as a span tree -> docs/TRACE.md
+make metrics    # the MLflow run history as a table    -> docs/METRICS.md
+make mlflow-ui  # browse the history interactively
+```
+
+### A real captured trace
+
+Tracing is **off by default** (`TRACE_EXPORTER=none`) — a service that traces whether or not
+you asked is a nuisance, and the no-op tracer makes every `with span(...)` free, which is
+why no call site needs an `if tracing_enabled` guard. Set `TRACE_EXPORTER=file` for a JSONL
+span log, or `otlp` to ship to any collector.
+
+```
+rag.ask                  141.61ms 100.0% ████████████████████ llm=False
+├─ rag.retrieve             140.30ms  99.1% ████████████████████ returned=5 top_k=5 candidate_k=30 hybrid=True rerank=True top_source=14-incident-comms.md
+│  ├─ rag.embed_query            6.57ms   4.6% █                    
+│  ├─ rag.search_dense           0.56ms   0.4%                      hits=22 backend=qdrant
+│  ├─ rag.search_bm25            0.13ms   0.1%                      hits=22
+│  ├─ rag.fuse_rrf               0.18ms   0.1%                      fused_candidates=22 alpha=0.6
+│  └─ rag.rerank               132.34ms  93.5% ███████████████████  scored=22 rerank_changed_top=False
+├─ rag.build_context          0.88ms   0.6%                      citations=5 context_tokens=1795
+└─ rag.answer_extractive      0.06ms   0.0%                      llm=False
+
+9 spans, 141.61ms wall clock
+```
+
+**What this is actually good for.** It independently corroborates the eval: `rag.rerank` is
+94% of a ~136 ms request, which is the same story as the measured p50 of 143 ms with
+re-ranking versus 9 ms without — arrived at by a different route. The
+`rerank_changed_top=False` attribute answers "did this step earn its 130 ms on *this*
+request?" from the trace alone, without re-running the eval.
+
+Note the models are warmed before the measured call. The first answer pays ~2.5 s loading
+the cross-encoder, which would otherwise dominate the tree and make `rag.rerank` look 20x
+more expensive than it is in steady state. Cold start is a real thing to measure; it just
+is not what this tree is showing.
+
+### Metric history
+
+Every eval run logs parameters and metrics to MLflow, so a regression is visible **across
+runs** rather than only in the last console output. `docs/METRICS.md` is the rendered
+history; it reproduces the sweep table above from a completely separate code path, which is
+a cheap check that neither is lying.
+
+### On LangSmith
+
+`TRACE_EXPORTER=otlp` pointed at LangSmith's OTLP endpoint with an `Authorization` header
+works, and the config is in `.env.example`. **That path is implemented and has never been
+executed** — no LangSmith key was used in this repo. So this makes *OpenTelemetry, tracing,
+observability and MLflow* defensible, and it does **not** make *LangSmith* or *W&B*
+defensible. Those should not go on a CV off the back of this repo.
+
+---
+
 ## API
 
 ```bash
@@ -309,6 +374,8 @@ behind it. Specifically:
   `faithful` describe the extractive fallback path.
 - **No auth, no rate limiting, no multi-tenancy.** A real deployment needs all three, and
   tenant-scoped filtering at the vector-store query, not after it.
+- **Tracing has only been exercised with the file exporter.** The OTLP path (and therefore
+  the LangSmith path) is implemented and unrun — no collector and no key were used.
 - **BM25 is an in-process index** rebuilt from the store on each ingest. Fine to ~10⁵
   chunks; past that it belongs in the engine that already holds the text (Qdrant sparse
   vectors or Postgres `tsvector`).

@@ -16,6 +16,7 @@ from typing import AsyncIterator
 from .config import settings
 from .models import Citation, Hit
 from .retrieve import retrieve
+from .tracing import set_attributes, span
 
 CONTEXT_TOKEN_BUDGET = 2400
 
@@ -67,21 +68,42 @@ def _extractive(question: str, hits: list[Hit], citations: list[Citation]) -> st
 
 
 def answer_sync(question: str, **kw) -> tuple[str, list[Citation]]:
-    hits = retrieve(question, **kw)
-    context, citations = build_context(hits)
-    cfg = settings()
+    with span("rag.ask", **{"rag.question_chars": len(question)}) as ask_span:
+        hits = retrieve(question, **kw)
+        with span("rag.build_context") as ctx_span:
+            context, citations = build_context(hits)
+            from .ingest import count_tokens
 
-    if not cfg.openai_api_key:
-        return _extractive(question, hits[: len(citations)], citations), citations
+            set_attributes(
+                ctx_span,
+                **{"rag.citations": len(citations), "rag.context_tokens": count_tokens(context)},
+            )
+        cfg = settings()
 
-    from openai import OpenAI
+        if not cfg.openai_api_key:
+            with span("rag.answer_extractive", **{"rag.llm": False}):
+                text = _extractive(question, hits[: len(citations)], citations)
+            set_attributes(ask_span, **{"rag.llm": False, "rag.answer_chars": len(text)})
+            return text, citations
 
-    resp = OpenAI(api_key=cfg.openai_api_key).chat.completions.create(
-        model=cfg.answer_model,
-        messages=build_messages(question, context),
-        temperature=0.0,
-    )
-    return resp.choices[0].message.content or "", citations
+        from openai import OpenAI
+
+        with span("rag.answer_llm", **{"rag.model": cfg.answer_model, "rag.llm": True}) as llm_span:
+            resp = OpenAI(api_key=cfg.openai_api_key).chat.completions.create(
+                model=cfg.answer_model,
+                messages=build_messages(question, context),
+                temperature=0.0,
+            )
+            text = resp.choices[0].message.content or ""
+            usage = getattr(resp, "usage", None)
+            if usage is not None:
+                set_attributes(
+                    llm_span,
+                    **{"rag.prompt_tokens": usage.prompt_tokens,
+                       "rag.completion_tokens": usage.completion_tokens},
+                )
+        set_attributes(ask_span, **{"rag.llm": True, "rag.answer_chars": len(text)})
+        return text, citations
 
 
 def _sse(event: str, data: dict) -> str:

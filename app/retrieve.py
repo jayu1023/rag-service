@@ -17,6 +17,7 @@ from functools import lru_cache
 from .config import settings
 from .embed import embedder, store
 from .models import Chunk, Hit
+from .tracing import set_attributes, span
 
 RRF_K = 60  # standard damping constant from the original RRF paper
 _TOKEN = re.compile(r"\w+", re.UNICODE)
@@ -124,16 +125,46 @@ def retrieve(
     # so recall@candidate_k is the real ceiling on precision@top_k.
     candidates = max(cfg.candidate_k, top_k)
 
-    query_vector = embedder().encode([question], is_query=True)[0]
-    dense = store().search(query_vector, candidates)
+    with span(
+        "rag.retrieve",
+        **{"rag.top_k": top_k, "rag.candidate_k": candidates,
+           "rag.hybrid": hybrid, "rag.rerank": use_rerank},
+    ) as retrieve_span:
+        with span("rag.embed_query", **{"rag.embed_model": cfg.embed_model}):
+            query_vector = embedder().encode([question], is_query=True)[0]
 
-    if not hybrid:
-        hits = [Hit(chunk=c, dense_score=s, fused_score=_rrf(i)) for i, (c, s) in enumerate(dense)]
-    else:
-        if not bm25().ready():
-            refresh_bm25()
-        hits = fuse(dense, bm25().search(question, candidates), cfg.hybrid_alpha)
+        with span("rag.search_dense", **{"rag.backend": cfg.vector_backend}) as dense_span:
+            dense = store().search(query_vector, candidates)
+            set_attributes(dense_span, **{"rag.hits": len(dense)})
 
-    if use_rerank:
-        hits = rerank(question, hits[:candidates])
-    return hits[:top_k]
+        if not hybrid:
+            hits = [Hit(chunk=c, dense_score=s, fused_score=_rrf(i)) for i, (c, s) in enumerate(dense)]
+        else:
+            with span("rag.search_bm25") as bm25_span:
+                if not bm25().ready():
+                    refresh_bm25()
+                lexical = bm25().search(question, candidates)
+                set_attributes(bm25_span, **{"rag.hits": len(lexical)})
+            with span("rag.fuse_rrf", **{"rag.alpha": cfg.hybrid_alpha}) as fuse_span:
+                hits = fuse(dense, lexical, cfg.hybrid_alpha)
+                set_attributes(fuse_span, **{"rag.fused_candidates": len(hits)})
+
+        if use_rerank:
+            with span("rag.rerank", **{"rag.rerank_model": cfg.rerank_model}) as rerank_span:
+                scored = rerank(question, hits[:candidates])
+                set_attributes(rerank_span, **{"rag.scored": len(scored)})
+                # Whether the re-ranker actually changed the top hit is the one
+                # attribute worth having when asking "is this step earning its
+                # 130ms?" -- it answers that from the trace alone.
+                moved = bool(hits and scored and hits[0].chunk.id != scored[0].chunk.id)
+                set_attributes(rerank_span, **{"rag.rerank_changed_top": moved})
+                hits = scored
+
+        final = hits[:top_k]
+        set_attributes(
+            retrieve_span,
+            **{"rag.returned": len(final),
+               "rag.top_source": final[0].chunk.source if final else None,
+               "rag.top_score": round(final[0].score, 4) if final else None},
+        )
+        return final

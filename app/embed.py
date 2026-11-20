@@ -14,6 +14,7 @@ from typing import Iterable, Protocol
 
 from .config import settings
 from .models import Chunk
+from .tracing import set_attributes, span
 
 BATCH = 64
 
@@ -247,6 +248,10 @@ def embed_and_upsert(chunks: Iterable[Chunk]) -> int:
     chunks = list(chunks)
     if not chunks:
         return 0
-    vectors = embedder().encode([c.text for c in chunks])
-    store().upsert(chunks, vectors)
+    with span("rag.embed_batch", **{"rag.chunks": len(chunks)}) as embed_span:
+        vectors = embedder().encode([c.text for c in chunks])
+        set_attributes(embed_span, **{"rag.dim": len(vectors[0]) if vectors else 0})
+    with span("rag.upsert", **{"rag.chunks": len(chunks),
+                               "rag.backend": settings().vector_backend}):
+        store().upsert(chunks, vectors)
     return len(chunks)

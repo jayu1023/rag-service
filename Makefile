@@ -1,7 +1,7 @@
 VENV ?= .venv
 PY   := $(VENV)/bin/python
 
-.PHONY: help venv install dev evals sweep test fmt up down ingest ask clean
+.PHONY: help venv install dev evals sweep test fmt up down ingest ask trace metrics clean
 
 help:
 	@grep -E '^[a-z-]+:.*?##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | expand -t24
@@ -31,6 +31,15 @@ evals: ## retrieval + answer metrics on the default config
 sweep: ## full chunk-size / retrieval ablation
 	$(PY) evals/run_evals.py --sweep --json-out data/sweep.json
 
+trace: ## run one traced /ask and render the span tree (writes docs/TRACE.md)
+	TRACE_EXPORTER=file $(PY) -m app.trace_tree --demo --write
+
+metrics: ## render the MLflow run history (writes docs/METRICS.md)
+	$(PY) evals/mlflow_history.py --write
+
+mlflow-ui: ## browse the metric history interactively
+	$(VENV)/bin/mlflow ui --backend-store-uri ./mlruns
+
 test: ## unit + api tests
 	$(PY) -m pytest
 
@@ -41,4 +50,4 @@ down:
 	docker compose down -v
 
 clean:
-	rm -rf data/qdrant data/evalruns data/sweep.json .pytest_cache mlruns
+	rm -rf data/qdrant data/evalruns data/sweep.json data/trace.jsonl .pytest_cache mlruns
